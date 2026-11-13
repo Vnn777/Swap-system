@@ -232,7 +232,7 @@ def save_record():
     items=data.get('items')
     try: datetime.strptime(date,'%Y-%m-%d')
     except (ValueError,TypeError): return jsonify(error='Data inválida.'),400
-    if shift not in ('1º turno','2º turno','3º turno','Administrativo') or not all((outgoing,incoming,sector)) or not isinstance(items,list) or len(items)!=9:
+    if shift not in ('Turno A','Turno B','Turno C','Turno D') or not all((outgoing,incoming,sector)) or not isinstance(items,list) or len(items)!=9:
         return jsonify(error='Preencha todos os campos e avalie os 9 itens.'),400
     parsed=[]
     for i,entry in enumerate(items,1):

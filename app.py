@@ -253,7 +253,7 @@ def save_record():
 def export():
     buffer=io.StringIO()
     writer=csv.writer(buffer,delimiter=';')
-    writer.writerow(['ID','Registrado em UTC','Data do turno','Turno','Setor/Linha','Entrega','Recebimento','Criado por','Item','Verificação','Status','Pendência/Detalhes','Observações gerais'])
+    writer.writerow(['ID','Registrado em UTC','Data do turno','Turno','Setor/Linha','Responsável pela Vistoria da Linha','Responsáveis ou Líder da Linha','Criado por','Item','Verificação','Status','Pendência/Detalhes','Observações gerais'])
     with db() as c:
         rows=c.execute('''SELECT r.*,u.full_name author,i.item_number,i.status,i.note FROM records r JOIN users u ON u.id=r.created_by JOIN record_items i ON i.record_id=r.id ORDER BY r.id DESC,i.item_number''').fetchall()
     for r in rows:

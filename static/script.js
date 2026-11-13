@@ -61,20 +61,19 @@ function renderItems(){
    button.type='button';button.setAttribute('aria-pressed',String(states[i].status===value));
    button.onclick=()=>{
     states[i].status=value;
-    if(value==='ok'){states[i].note='';states[i].photos=[];}
     renderItems();
    };options.append(button);
   }
   right.append(options);
-  if(states[i].status==='pending'||states[i].status==='na'){
+  if(states[i].status){
    const label=el('label','evidence-label','Relato do ocorrido');
    const note=el('textarea','note');note.value=states[i].note;note.maxLength=500;note.rows=2;
-   note.placeholder=states[i].status==='pending'?'Descreva a pendência e o que foi observado':'Explique por que esse item não se aplica';
+   note.placeholder=states[i].status==='pending'?'Descreva a pendência e o que foi observado':states[i].status==='na'?'Explique por que esse item não se aplica':'Descreva o que foi conferido (opcional)';
    note.setAttribute('aria-label','Relato do item '+(i+1));note.oninput=e=>{states[i].note=e.target.value;};
    label.append(note);right.append(label);
    const photoWrap=el('div','photo-attachment');
    photoWrap.append(el('strong','attachment-heading','📷 Anexo de Fotos'));
-   photoWrap.append(el('p','attachment-help','Adicione até 2 fotos para comprovar o relato. Aceita imagens da câmera ou galeria.'));
+   photoWrap.append(el('p','attachment-help','Adicione até 2 fotos como evidência da verificação. Aceita imagens da câmera ou galeria.'));
    const gallery=el('div','photo-previews');
    for(const [n,src] of states[i].photos.entries()){
     const tile=el('div','photo-preview');const img=el('img');img.src=src;img.alt='Foto anexada '+(n+1)+' ao item '+(i+1);img.loading='lazy';

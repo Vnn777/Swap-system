@@ -1,5 +1,10 @@
 __pycache__/
 *.pyc
 .env
+.env.*
 instance/
 *.db
+*.dump
+*.backup
+*.sql
+backups/

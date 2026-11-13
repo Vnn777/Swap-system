@@ -1,4 +1,6 @@
 import csv
+import base64
+import binascii
 import io
 import os
 import secrets
@@ -13,8 +15,9 @@ try:
 except ImportError:
     psycopg = None
     dict_row = None
-from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
+from PIL import Image, UnidentifiedImageError
 
 BASE = Path(__file__).resolve().parent
 DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
@@ -27,9 +30,12 @@ if DATABASE_URL and not os.getenv('SECRET_KEY'):
     raise RuntimeError('SECRET_KEY obrigatoria em producao.')
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=bool(DATABASE_URL) or os.getenv('COOKIE_SECURE', '0') == '1', PERMANENT_SESSION_LIFETIME=timedelta(hours=10), MAX_CONTENT_LENGTH=30000)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=bool(DATABASE_URL) or os.getenv('COOKIE_SECURE', '0') == '1', PERMANENT_SESSION_LIFETIME=timedelta(hours=10), MAX_CONTENT_LENGTH=8000000)
 ITEMS = ['Organização e Limpeza','Insumos disponíveis','Manipulado e acabado liberados','Reatores cheios, quando não possível, kanban disponível','Passagem de turno líder a líder de linha','Apontamento nas linhas atualizado','IBCs disponíveis para envase','Paletes disponíveis para produção','Paletes quebrados no descarte']
 STATUSES = {'ok', 'pending', 'na'}
+MAX_PHOTOS_PER_ITEM = 2
+MAX_PHOTOS_PER_RECORD = 10
+MAX_PHOTO_BYTES = 600_000
 
 class PgRow(dict):
     """Suporta acesso por chave e indice (compatibilidade sqlite3.Row)."""
@@ -100,12 +106,24 @@ def init_db():
                 record_id BIGINT NOT NULL REFERENCES records(id) ON DELETE CASCADE,
                 item_number INTEGER NOT NULL, status TEXT NOT NULL, note TEXT NOT NULL,
                 PRIMARY KEY(record_id,item_number))""")
+            c.execute("""CREATE TABLE IF NOT EXISTS record_photos(
+                id BIGSERIAL PRIMARY KEY,
+                record_id BIGINT NOT NULL,
+                item_number INTEGER NOT NULL,
+                mime_type TEXT NOT NULL CHECK(mime_type='image/jpeg'),
+                content BYTEA NOT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(record_id,item_number) REFERENCES record_items(record_id,item_number) ON DELETE CASCADE
+            )""")
+            c.execute('CREATE INDEX IF NOT EXISTS record_photos_record_idx ON record_photos(record_id)')
     else:
         with db() as c:
             c.execute('PRAGMA journal_mode=WAL')
             c.executescript("""CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT NOT NULL COLLATE NOCASE UNIQUE,full_name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','user')),active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,shift_date TEXT NOT NULL,shift TEXT NOT NULL,outgoing TEXT NOT NULL,incoming TEXT NOT NULL,sector TEXT NOT NULL,notes TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS record_items(record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,item_number INTEGER NOT NULL,status TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(record_id,item_number));""")
+            CREATE TABLE IF NOT EXISTS record_items(record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,item_number INTEGER NOT NULL,status TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(record_id,item_number));
+            CREATE TABLE IF NOT EXISTS record_photos(id INTEGER PRIMARY KEY,record_id INTEGER NOT NULL,item_number INTEGER NOT NULL,mime_type TEXT NOT NULL,content BLOB NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(record_id,item_number) REFERENCES record_items(record_id,item_number) ON DELETE CASCADE);
+            CREATE INDEX IF NOT EXISTS record_photos_record_idx ON record_photos(record_id);""")
 
 def bootstrap_shared():
     """Cria uma conta compartilhada e bloqueia contas antigas sem apagar checklists."""
@@ -217,7 +235,27 @@ def record_detail(rid):
         r=c.execute('SELECT r.*,u.full_name AS author FROM records r JOIN users u ON u.id=r.created_by WHERE r.id=?',(rid,)).fetchone()
         if not r: return jsonify(error='Registro não encontrado.'),404
         items=c.execute('SELECT item_number,status,note FROM record_items WHERE record_id=? ORDER BY item_number',(rid,)).fetchall()
-    return jsonify(record=dict(r),items=[dict(i) for i in items])
+        photos=c.execute('SELECT id,item_number FROM record_photos WHERE record_id=? ORDER BY id',(rid,)).fetchall()
+    by_item = {}
+    for p in photos:
+        by_item.setdefault(p['item_number'],[]).append({'id':p['id'],'url':url_for('photo_file',rid=rid,pid=p['id'])})
+    return jsonify(record=dict(r),items=[{**dict(i),'photos':by_item.get(i['item_number'],[])} for i in items])
+
+@app.get('/api/records/<int:rid>/photos/<int:pid>')
+@auth
+def photo_file(rid,pid):
+    with db() as c:
+        p=c.execute('SELECT mime_type,content FROM record_photos WHERE record_id=? AND id=?',(rid,pid)).fetchone()
+    if p is None:
+        abort(404)
+    content=p['content']
+    if isinstance(content,memoryview):
+        content=content.tobytes()
+    return Response(content, mimetype=p['mime_type'], headers={
+        'Content-Disposition':'inline; filename="evidencia.jpg"',
+        'X-Content-Type-Options':'nosniff',
+        'Cache-Control':'no-store, private'
+    })
 
 @app.post('/api/records')
 @auth
@@ -235,16 +273,41 @@ def save_record():
     if shift not in ('Turno A','Turno B','Turno C','Turno D') or not all((outgoing,incoming,sector)) or not isinstance(items,list) or len(items)!=9:
         return jsonify(error='Preencha todos os campos e avalie os 9 itens.'),400
     parsed=[]
+    photo_rows=[]
     for i,entry in enumerate(items,1):
         if not isinstance(entry,dict) or entry.get('status') not in STATUSES:
             return jsonify(error=f'Avalie o item {i}.'),400
         note=clean(entry.get('note',''),500)
         if entry['status']=='pending' and not note:
             return jsonify(error=f'Descreva a pendência do item {i}.'),400
+        photos=entry.get('photos',[])
+        if not isinstance(photos,list) or len(photos)>MAX_PHOTOS_PER_ITEM:
+            return jsonify(error=f'No máximo {MAX_PHOTOS_PER_ITEM} fotos no item {i}.'),400
+        if photos and entry['status']=='ok':
+            return jsonify(error=f'Fotos só são aceitas em Pendente ou Não aplicável (item {i}).'),400
+        for photo in photos:
+            if not isinstance(photo,str) or not photo.startswith('data:image/jpeg;base64,'):
+                return jsonify(error=f'Formato de foto inválido no item {i}.'),400
+            try:
+                raw=base64.b64decode(photo.split(',',1)[1],validate=True)
+                if len(raw)>MAX_PHOTO_BYTES or len(raw)<100:
+                    return jsonify(error=f'Foto do item {i} excede o limite de 600 KB.'),400
+                with Image.open(io.BytesIO(raw)) as img:
+                    if img.format!='JPEG' or img.width>2000 or img.height>2000:
+                        return jsonify(error=f'Foto inválida no item {i}.'),400
+                    img.verify()
+            except (ValueError, binascii.Error, UnidentifiedImageError, OSError, Image.DecompressionBombError):
+                return jsonify(error=f'Não foi possível validar a foto do item {i}.'),400
+            photo_rows.append((i,'image/jpeg',raw,now()))
+        if len(photo_rows)>MAX_PHOTOS_PER_RECORD:
+            return jsonify(error='Limite de 10 fotos por checklist.'),400
         parsed.append((i,entry['status'],note))
     with db() as c:
         cur=c.execute('INSERT INTO records(created_by,created_at,shift_date,shift,outgoing,incoming,sector,notes) VALUES(?,?,?,?,?,?,?,?)',(user()['id'],now(),date,shift,outgoing,incoming,sector,notes))
         c.executemany('INSERT INTO record_items(record_id,item_number,status,note) VALUES(?,?,?,?)',[(cur.lastrowid,*p) for p in parsed])
+        if photo_rows:
+            c.executemany('INSERT INTO record_photos(record_id,item_number,mime_type,content,created_at) VALUES(?,?,?,?,?)',
+                          [(cur.lastrowid,*p) for p in photo_rows])
         rid=cur.lastrowid
     return jsonify(ok=True,id=rid),201
 

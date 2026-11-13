@@ -107,25 +107,48 @@ def init_db():
             CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,shift_date TEXT NOT NULL,shift TEXT NOT NULL,outgoing TEXT NOT NULL,incoming TEXT NOT NULL,sector TEXT NOT NULL,notes TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS record_items(record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,item_number INTEGER NOT NULL,status TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(record_id,item_number));""")
 
-def bootstrap_admin():
-    login = os.getenv('INITIAL_ADMIN_USERNAME', '').strip()
-    password = os.getenv('INITIAL_ADMIN_PASSWORD', '')
-    name = os.getenv('INITIAL_ADMIN_NAME', '').strip()
-    if not (login and name and password):
-        return
-    if len(password) < 10 or len(login)>50 or len(name)>100 or not login.replace('_', '').replace('.', '').isalnum():
-        raise RuntimeError('Credenciais iniciais invalidas.')
+def bootstrap_shared():
+    """Cria uma conta compartilhada e bloqueia contas antigas sem apagar checklists."""
+    login = os.getenv('SHARED_LOGIN', 'ADM Produção').strip()
+    password = os.getenv('SHARED_PASSWORD', '')
+    if not login or len(login) > 50:
+        raise RuntimeError('SHARED_LOGIN invalido.')
     with db() as c:
-        if c.execute('SELECT COUNT(*) AS total FROM users').fetchone()['total'] == 0:
-            c.execute('INSERT INTO users(username,full_name,password_hash,role,created_at) VALUES(?,?,?,?,?)',
-                      (login,name,generate_password_hash(password),'admin',now()))
+        current = c.execute('SELECT id FROM users WHERE LOWER(username)=LOWER(?)', (login,)).fetchone()
+        if current is None:
+            if not password:
+                app.logger.warning('Configure SHARED_PASSWORD para criar a conta compartilhada.')
+                return
+            if len(password) < 12:
+                raise RuntimeError('SHARED_PASSWORD deve ter pelo menos 12 caracteres.')
+            current = c.execute('INSERT INTO users(username,full_name,password_hash,role,created_at) VALUES(?,?,?,?,?)',
+                                (login,'ADM Produção',generate_password_hash(password),'admin',now()))
+            shared_id = current.lastrowid
+        else:
+            shared_id = current['id']
+        c.execute("UPDATE users SET active=0 WHERE id<>? AND active<>0", (shared_id,))
+        c.execute("UPDATE users SET active=1, role='admin' WHERE id=?", (shared_id,))
+
+def reset_shared_password():
+    """Redefine a senha sob comando explícito; não reinicia senhas em cada deploy."""
+    password = os.getenv('SHARED_PASSWORD', '')
+    if len(password) < 12:
+        raise RuntimeError('Defina SHARED_PASSWORD com 12 caracteres ou mais.')
+    login = os.getenv('SHARED_LOGIN', 'ADM Produção').strip()
+    with db() as c:
+        row = c.execute('SELECT id FROM users WHERE LOWER(username)=LOWER(?)', (login,)).fetchone()
+        if not row:
+            raise RuntimeError('Conta compartilhada não encontrada.')
+        c.execute('UPDATE users SET password_hash=? WHERE id=?',
+                  (generate_password_hash(password),row['id']))
+    print('Senha compartilhada atualizada.')
 
 def now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def clean(v, n=100): return v.strip() if isinstance(v,str) and len(v.strip()) <= n else ''
 def user():
     uid=session.get('uid')
     if not uid: return None
-    with db() as c: return c.execute('SELECT id,username,full_name,role FROM users WHERE id=? AND active=1',(uid,)).fetchone()
+    with db() as c: return c.execute('SELECT id,username,full_name,role FROM users WHERE id=? AND active=1 AND LOWER(username)=LOWER(?)',(uid,os.getenv('SHARED_LOGIN','ADM Produção'))).fetchone()
 
 def auth(fn):
     @wraps(fn)
@@ -165,7 +188,7 @@ def login():
     if request.method=='GET': return render_template('login.html',error=None)
     username=clean(request.form.get('username'),50)
     password=request.form.get('password','')
-    with db() as c: u=c.execute('SELECT * FROM users WHERE LOWER(username)=LOWER(?) AND active=1',(username,)).fetchone()
+    with db() as c: u=c.execute('SELECT * FROM users WHERE LOWER(username)=LOWER(?) AND LOWER(username)=LOWER(?) AND active=1',(username,os.getenv('SHARED_LOGIN','ADM Produção'))).fetchone()
     if not u or not check_password_hash(u['password_hash'],password):
         return render_template('login.html',error='Usuário ou senha incorretos.'),401
     session.clear()
@@ -184,7 +207,7 @@ def logout():
 @auth
 def records():
     with db() as c:
-        rows=c.execute('''SELECT r.*,u.full_name AS author,(SELECT COUNT(*) FROM record_items i WHERE i.record_id=r.id AND i.status='pending') AS pending_count FROM records r JOIN users u ON u.id=r.created_by ORDER BY r.id DESC LIMIT 1000''').fetchall()
+        rows=c.execute('''SELECT r.*,u.full_name AS author,(SELECT COUNT(*) FROM record_items i WHERE i.record_id=r.id AND i.status='pending') AS pending_count FROM records r JOIN users u ON u.id=r.created_by ORDER BY r.id DESC''').fetchall()
     return jsonify(records=[dict(r) for r in rows])
 
 @app.get('/api/records/<int:rid>')
@@ -237,47 +260,6 @@ def export():
         writer.writerow([r['id'],r['created_at'],r['shift_date'],r['shift'],r['sector'],r['outgoing'],r['incoming'],r['author'],r['item_number'],ITEMS[r['item_number']-1],{'ok':'Conforme','pending':'Pendente','na':'Não aplicável'}[r['status']],r['note'],r['notes']])
     return Response('\ufeff'+buffer.getvalue(),mimetype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="historico-passagem-turnos.csv"'})
 
-@app.get('/api/users')
-@admin
-def list_users():
-    with db() as c: rows=c.execute('SELECT id,username,full_name,role,active,created_at FROM users ORDER BY id').fetchall()
-    return jsonify(users=[dict(r) for r in rows])
-
-@app.post('/api/users')
-@admin
-def add_user():
-    d=request.get_json(silent=True) or {}
-    username=clean(d.get('username'),50)
-    full_name=clean(d.get('full_name'))
-    password=d.get('password','')
-    role=d.get('role','user')
-    if not username or not username.replace('_','').replace('.','').isalnum() or not full_name or not isinstance(password,str) or len(password)<10 or role not in ('user','admin'):
-        return jsonify(error='Preencha nome, login (letras/números/._) e senha de pelo menos 10 caracteres.'),400
-    try:
-        with db() as c:
-            cur=c.execute('INSERT INTO users(username,full_name,password_hash,role,created_at) VALUES(?,?,?,?,?)',(username,full_name,generate_password_hash(password),role,now()))
-        return jsonify(ok=True,id=cur.lastrowid),201
-    except (sqlite3.IntegrityError, psycopg.IntegrityError if psycopg else sqlite3.IntegrityError): return jsonify(error='Esse login já está cadastrado.'),409
-
-@app.patch('/api/users/<int:uid>')
-@admin
-def edit_user(uid):
-    d=request.get_json(silent=True) or {}
-    with db() as c:
-        existing=c.execute('SELECT * FROM users WHERE id=?',(uid,)).fetchone()
-        if not existing: return jsonify(error='Usuário não encontrado.'),404
-        if uid==user()['id'] and 'active' in d and not d['active']:
-            return jsonify(error='Você não pode desativar sua própria conta.'),400
-        if uid==user()['id'] and d.get('role')=='user':
-            return jsonify(error='Você não pode remover sua própria administração.'),400
-        if 'active' in d:
-            if type(d['active']) is not bool: return jsonify(error='Status inválido.'),400
-            c.execute('UPDATE users SET active=? WHERE id=?',(int(d['active']),uid))
-        if 'password' in d:
-            if not isinstance(d['password'],str) or len(d['password'])<10: return jsonify(error='Senha deve ter no mínimo 10 caracteres.'),400
-            c.execute('UPDATE users SET password_hash=? WHERE id=?',(generate_password_hash(d['password']),uid))
-    return jsonify(ok=True)
-
 @app.get('/health')
 def health():
     try:
@@ -289,59 +271,22 @@ def health():
         return jsonify(status='unavailable'),503
 
 
-INITIAL_USERS = 16
-
 def setup():
-    """Cadastra até 16 contas administradoras e atualiza perfis existentes."""
     init_db()
+    bootstrap_shared()
     with db() as c:
-        existing = c.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-        updated = c.execute("UPDATE users SET role='admin' WHERE role!='admin'").rowcount
-    if updated:
-        print(f'{updated} conta(s) existente(s) promovida(s) a administrador. Histórico preservado.')
-    if existing >= INITIAL_USERS:
-        print(f'Já existem {existing} contas. Para adicionar outras, use o painel Usuários do administrador.')
-        return
-    missing = INITIAL_USERS - existing
-    print(f'Existem {existing} contas; serão cadastradas mais {missing}, para totalizar {INITIAL_USERS}.')
-    print('Todas as 16 contas terão perfil de administrador.')
-    print('As senhas ficam ocultas e precisam ter no mínimo 10 caracteres.')
-    from getpass import getpass
-    creds=[]
-    used=set()
-    with db() as c:
-        used = {row[0].lower() for row in c.execute('SELECT username FROM users')}
-    for number in range(missing):
-        role = 'admin'
-        print(f'\nConta {existing+number+1}/{INITIAL_USERS}: Administrador')
-        name=input('Nome completo: ').strip()
-        username=input('Login: ').strip()
-        password=getpass('Senha (mínimo 10 caracteres): ')
-        if (not name or not username or not username.replace('_','').replace('.','').isalnum()
-                or len(username)>50 or len(name)>100 or len(password)<10 or username.lower() in used):
-            print('Dados inválidos ou login repetido. Nenhuma conta nova foi salva. Execute novamente.'); return
-        used.add(username.lower())
-        creds.append((username,name,generate_password_hash(password),role,now()))
-    try:
-        with db() as c:
-            c.executemany('INSERT INTO users(username,full_name,password_hash,role,created_at) VALUES(?,?,?,?,?)',creds)
-        print(f'\n{missing} novas contas criadas! Total: {INITIAL_USERS}. Inicie com: python app.py')
-    except (sqlite3.IntegrityError, psycopg.IntegrityError if psycopg else sqlite3.IntegrityError):
-        print('Erro: login duplicado. Nenhuma conta nova foi salva.')
-
-def promote_all():
-    """Transforma todos os usuários existentes em administradores sem apagar dados."""
-    init_db()
-    with db() as c:
-        count = c.execute("UPDATE users SET role='admin' WHERE role!='admin'").rowcount
-        total = c.execute('SELECT COUNT(*) FROM users').fetchone()[0]
-    print(f'{count} conta(s) promovida(s). Total de administradores: {total}.')
+        row = c.execute('SELECT username,active FROM users WHERE LOWER(username)=LOWER(?)',
+                        (os.getenv('SHARED_LOGIN','ADM Produção').strip(),)).fetchone()
+    if not row:
+        print('Configure SHARED_PASSWORD antes de executar setup.')
+    else:
+        print('Conta compartilhada pronta:', row['username'])
 
 init_db()
-bootstrap_admin()
+bootstrap_shared()
 if __name__=='__main__':
     if len(sys.argv)>1 and sys.argv[1]=='setup': setup()
-    elif len(sys.argv)>1 and sys.argv[1]=='promote-all': promote_all()
+    elif len(sys.argv)>1 and sys.argv[1]=='reset-shared-password': reset_shared_password()
     else:
         if not os.environ.get('SECRET_KEY'): print('AVISO: defina SECRET_KEY no ambiente antes de publicar.')
         app.run(host='0.0.0.0',port=int(os.getenv('PORT',5000)),debug=False)

@@ -1,0 +1,41 @@
+name: Backup criptografado do Neon
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 0'
+permissions:
+  contents: read
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Verificar configuracao
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_ENCRYPTION_PASSWORD }}
+        run: |
+          test -n "$DATABASE_URL" || { echo 'NEON_DATABASE_URL nao configurada'; exit 1; }
+          test "${#BACKUP_PASSWORD}" -ge 20 || { echo 'BACKUP_ENCRYPTION_PASSWORD deve ter 20+ caracteres'; exit 1; }
+      - name: Exportar PostgreSQL
+        env:
+          DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          mkdir -m 700 -p backup
+          docker run --rm -e DATABASE_URL -v "$PWD/backup:/backup" postgres:18 \
+            sh -c 'pg_dump --dbname="$DATABASE_URL" --format=custom --no-owner --no-acl --file=/backup/swap-system.dump'
+      - name: Criptografar e eliminar arquivo temporario
+        env:
+          BACKUP_PASSWORD: ${{ secrets.BACKUP_ENCRYPTION_PASSWORD }}
+        run: |
+          openssl enc -aes-256-cbc -salt -pbkdf2 -iter 200000 \
+            -in backup/swap-system.dump -out backup/swap-system.dump.enc \
+            -pass env:BACKUP_PASSWORD
+          rm -f backup/swap-system.dump
+      - name: Arquivar copia criptografada
+        uses: actions/upload-artifact@v4
+        with:
+          name: swap-system-neon-${{ github.run_id }}
+          path: backup/swap-system.dump.enc
+          retention-days: 30
+          if-no-files-found: error

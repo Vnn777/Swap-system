@@ -37,7 +37,7 @@ A senha configurada em `SHARED_PASSWORD` é usada **somente ao criar a conta**; 
 
 ## Evidências fotográficas
 
-Nos itens **Pendente** e **Não aplicável**, o formulário mostra **Relato do ocorrido** e **Anexo de Fotos**. É possível anexar até **2 fotos por item**, com limite de **10 fotos por checklist**. As fotos são reduzidas para JPEG no navegador (até 1.280 px e 600 KB cada), validadas no servidor e armazenadas diretamente no **PostgreSQL Neon**, na tabela `record_photos`. Quando o checklist for aberto pela pasta mensal, as fotos aparecerão abaixo do respectivo item.
+Nos itens **Conforme**, **Pendente** e **Não aplicável**, o formulário mostra **Relato do ocorrido** e **Anexo de Fotos**. O relato é opcional para itens conformes e não aplicáveis e obrigatório para pendências. É possível anexar até **2 fotos por item**, com limite de **10 fotos por checklist**. As fotos são reduzidas para JPEG no navegador (até 1.280 px e 600 KB cada), validadas no servidor e armazenadas diretamente no **PostgreSQL Neon**, na tabela `record_photos`. Quando o checklist for aberto pela pasta mensal, as fotos aparecerão abaixo do respectivo item.
 
 As imagens **não são gravadas no disco temporário do Render**. O acesso às fotos exige login na aplicação. Caso precise documentar um relato, escreva no campo de texto correspondente. Essa versão não envia gravações de voz/áudio.
 

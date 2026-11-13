@@ -1,1 +1,52 @@
-<!doctype html><html lang="pt-BR"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Passagem de Turno | Regra Clara</title><link rel="stylesheet" href="/static/style.css"><meta name="csrf-token" content="{{ csrf }}"></head><body><div class="app-shell"><aside class="sidebar"><div class="brand"><span class="brand-icon">✓</span><div><strong>REGRA CLARA</strong><small>Controle operacional</small></div></div><nav aria-label="Menu principal"><button class="nav-link active" data-screen="checklist">☑ Checklist</button><button class="nav-link" data-screen="history">▤ Histórico</button>{% if me.role=='admin' %}<button class="nav-link" data-screen="users">♙ Usuários</button>{% endif %}</nav><div class="sidebar-foot"><div class="profile">{{ me.full_name }}<small>{{ 'Administrador' if me.role=='admin' else 'Operador' }} · @{{ me.username }}</small></div><button id="logout" class="nav-link">Sair da conta ↗</button><span class="dot"></span> Banco compartilhado · v2.0</div></aside><main class="main"><div class="topbar"><span class="eyebrow">OPERAÇÃO / CONTROLE DE TURNO</span><span id="today-label"></span></div><section id="checklist-screen" class="screen"><header class="page-header"><div><p class="eyebrow">PASSAGEM DE TURNO</p><h1>Checklist operacional</h1><p class="subtitle">Somos um time — há 1 único bastão.</p></div><div class="version">REGRA CLARA <span>v2.0</span></div></header><section class="panel"><div class="section-heading"><div><h2>Dados do turno</h2><p>Identifique o turno antes de iniciar a conferência.</p></div><span class="step-label">ETAPA 01</span></div><div class="form-grid"><label>Data do turno<input id="date" type="date" required></label><label>Turno<select id="shift"><option value="">Selecione o turno</option><option>1º turno</option><option>2º turno</option><option>3º turno</option><option>Administrativo</option></select></label><label>Responsável pela entrega<input id="outgoing" placeholder="Nome de quem entrega" maxlength="100"></label><label>Responsável pelo recebimento<input id="incoming" placeholder="Nome de quem recebe" maxlength="100"></label><label class="wide">Setor / Linha<input id="sector" placeholder="Ex.: Produção — Linha 01" maxlength="100"></label></div></section><section class="panel"><div class="section-heading"><div><h2>Itens de verificação</h2><p>Marque conforme, pendente ou não aplicável.</p></div><span class="step-label">ETAPA 02</span></div><div class="progress-wrap"><div class="progress-text"><span id="progress-description">0 de 9 itens avaliados</span><strong id="progress-percent">0%</strong></div><div class="progress-track"><div id="progress-fill"></div></div></div><div id="item-list" class="item-list"></div><div class="summary-grid"><div class="stat"><strong id="count-ok">0</strong><span>Conformes</span></div><div class="stat"><strong id="count-pending">0</strong><span>Pendentes</span></div><div class="stat"><strong id="count-na">0</strong><span>Não aplicáveis</span></div><div class="stat"><strong id="count-remaining">9</strong><span>Não avaliados</span></div></div></section><section class="panel"><div class="section-heading"><div><h2>Observações gerais</h2><p>O que o próximo turno precisa saber?</p></div><span class="step-label">ETAPA 03</span></div><textarea id="notes" placeholder="Ocorrências, manutenções, entregas pendentes..." rows="4" maxlength="3000"></textarea></section><div id="feedback" class="feedback" role="status"></div><div class="actions"><button id="clear-btn" class="button secondary">Limpar</button><button id="save-btn" class="button primary">✓ Finalizar e salvar turno</button></div></section><section id="history-screen" class="screen hidden"><header class="page-header"><div><p class="eyebrow">RASTREABILIDADE</p><h1>Histórico compartilhado</h1><p class="subtitle">Registros feitos por todos os funcionários.</p></div><a class="button primary" href="/api/export">↓ Exportar Excel (CSV)</a></header><section class="panel"><div class="history-controls"><label>Pesquisar<input id="search" type="search" placeholder="Responsável, linha, turno..."></label><label>Status<select id="status-filter"><option value="all">Todos</option><option value="pending">Com pendências</option><option value="ok">Sem pendências</option></select></label></div><div id="history-list" class="history-list"></div></section></section>{% if me.role=='admin' %}<section id="users-screen" class="screen hidden"><header class="page-header"><div><p class="eyebrow">ADMINISTRAÇÃO</p><h1>Gerenciar funcionários</h1><p class="subtitle">Cadastre quantas contas precisar.</p></div></header><section class="panel"><h2>Adicionar usuário</h2><p class="muted">Novos colaboradores acessam com login e senha individuais.</p><form id="user-form" class="form-grid"><label>Nome completo<input id="new-name" required maxlength="100"></label><label>Login<input id="new-login" required maxlength="50" placeholder="ex.: operador4"></label><label>Senha temporária (mínimo 10 caracteres)<input type="password" id="new-password" required minlength="10" autocomplete="new-password"></label><label>Perfil<select id="new-role"><option value="admin">Administrador</option><option value="user">Operador</option></select></label><div class="wide"><button class="button primary" type="submit">+ Cadastrar usuário</button></div></form><div id="user-feedback" class="feedback"></div></section><section class="panel"><h2>Contas cadastradas</h2><div id="user-list" class="user-list"></div></section></section>{% endif %}</main></div><dialog id="detail-modal"><div class="dialog-head"><h2>Registro do turno</h2><button id="close-modal" class="icon-button" aria-label="Fechar">✕</button></div><div id="detail-content"></div><div class="dialog-actions"><button id="print-btn" class="button secondary">Imprimir registro</button></div></dialog><div id="app-data" data-items='{{ items | tojson | forceescape }}' data-me='{{ me | tojson | forceescape }}' hidden></div><script src="/static/script.js" defer></script></body></html>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="csrf-token" content="{{ csrf }}">
+<title>Swap-system | Arquivo de Checklists</title>
+<link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="logo">✓</span><div><strong>SWAP-SYSTEM</strong><small>Produção · arquivo de checklists</small></div></div>
+  <div class="header-right"><span class="user">{{ me.full_name }}</span><button id="logout" class="linkbtn" type="button">Sair da conta</button></div>
+</header>
+<main class="layout">
+<section id="library-screen">
+  <div class="heading"><div><p class="eyebrow">ARQUIVO DIGITAL</p><h1>Checklists de produção</h1><p class="muted">Todas as listas ficam salvas e organizadas pelo mês e ano em que foram registradas.</p></div><button id="new-btn" class="button primary" type="button">+ Criar checklist</button></div>
+  <div class="summary"><div><small>Total de checklists</small><strong id="total-count">—</strong></div><div><small>Meses arquivados</small><strong id="month-count">—</strong></div><div><small>Com pendências</small><strong id="pending-count">—</strong></div></div>
+  <div id="library-feedback" role="status" class="feedback"></div>
+  <section class="panel"><h2>Pastas por mês e ano</h2><div id="folder-list" class="folders"></div></section>
+</section>
+
+<section id="month-screen" class="hidden">
+  <button id="back-library" class="back" type="button">← Voltar aos meses</button>
+  <div class="heading"><div><p class="eyebrow">PASTA DO ARQUIVO</p><h1 id="month-title">Checklists</h1><p id="month-subtitle" class="muted"></p></div><button id="new-from-month" class="button primary" type="button">+ Criar checklist</button></div>
+  <section class="panel"><div id="month-records" class="records"></div></section>
+</section>
+
+<section id="form-screen" class="hidden">
+  <button id="back-form" class="back" type="button">← Voltar ao arquivo</button>
+  <div class="heading"><div><p class="eyebrow">NOVA PASSAGEM DE TURNO</p><h1>Criar checklist</h1><p class="muted">Preencha os 9 itens. Após salvar, a lista ficará disponível para todos que acessarem esta conta.</p></div></div>
+  <form id="checklist-form">
+    <section class="panel"><h2>Dados do turno</h2><div class="fields">
+      <label>Data do turno<input id="date" type="date" required></label>
+      <label>Turno<select id="shift" required><option value="">Selecionar</option><option>1º turno</option><option>2º turno</option><option>3º turno</option><option>Administrativo</option></select></label>
+      <label>Responsável pela entrega<input id="outgoing" maxlength="100" required></label>
+      <label>Responsável pelo recebimento<input id="incoming" maxlength="100" required></label>
+      <label class="wide">Setor ou linha<input id="sector" maxlength="100" required placeholder="Ex.: Produção · Linha 01"></label>
+    </div></section>
+    <section class="panel"><div class="panel-heading"><h2>Verificações</h2><span id="progress">0 de 9 avaliados</span></div><div id="item-list"></div></section>
+    <section class="panel"><h2>Observações gerais</h2><textarea id="notes" rows="4" maxlength="3000" placeholder="Informações importantes para o próximo turno"></textarea></section>
+    <div id="save-feedback" class="feedback" role="status"></div><div class="bottom-actions"><button class="button secondary" id="cancel-btn" type="button">Cancelar</button><button class="button primary" id="save-btn" type="submit">✓ Salvar checklist</button></div>
+  </form>
+</section>
+<section id="detail-screen" class="hidden">
+  <button id="back-detail" class="back" type="button">← Voltar à pasta</button>
+  <div class="heading"><div><p class="eyebrow">CHECKLIST ARQUIVADO</p><h1 id="detail-title">Checklist</h1><p id="detail-datetime" class="muted"></p></div><button id="print-btn" class="button secondary" type="button">Imprimir</button></div>
+  <section class="panel" id="detail-content"></section>
+</section>
+</main>
+<div id="app-data" data-items="{{ items | tojson | forceescape }}" hidden></div>
+<script src="{{ url_for('static',filename='script.js') }}" defer></script>
+</body></html>

@@ -34,6 +34,15 @@ A senha configurada em `SHARED_PASSWORD` é usada **somente ao criar a conta**; 
 - A aplicação usa Neon quando `DATABASE_URL` está definido; no Render ela se recusa a iniciar sem o PostgreSQL para evitar dados no disco temporário.
 - Se uma conta antiga tiver exatamente o login `ADM Produção`, será reutilizada (inclusive sua senha atual). Para redefini-la, siga o procedimento de troca de senha.
 
+
+## Evidências fotográficas
+
+Nos itens **Pendente** e **Não aplicável**, o formulário mostra **Relato do ocorrido** e **Anexo de Fotos**. É possível anexar até **2 fotos por item**, com limite de **10 fotos por checklist**. As fotos são reduzidas para JPEG no navegador (até 1.280 px e 600 KB cada), validadas no servidor e armazenadas diretamente no **PostgreSQL Neon**, na tabela `record_photos`. Quando o checklist for aberto pela pasta mensal, as fotos aparecerão abaixo do respectivo item.
+
+As imagens **não são gravadas no disco temporário do Render**. O acesso às fotos exige login na aplicação. Caso precise documentar um relato, escreva no campo de texto correspondente. Essa versão não envia gravações de voz/áudio.
+
+**Cuidados:** não fotografe pessoas, documentos ou dados pessoais sem autorização. Use apenas evidências necessárias ao processo. O Neon Free tem limite de armazenamento; mantenha backups protegidos e acompanhe a utilização do banco. O backup completo de PostgreSQL já configurado inclui também as imagens.
+
 ## Backup do Neon
 
 O workflow `.github/workflows/backup-neon.yml` permanece disponível e pode executar um backup criptografado de PostgreSQL no GitHub Actions semanalmente. Para ativá-lo, configure em **GitHub > Settings > Secrets and variables > Actions**:

@@ -7,19 +7,76 @@ import sys
 from datetime import datetime, timezone, timedelta
 from functools import wraps
 from pathlib import Path
-from flask import Flask, Response, abort, jsonify, redirect, render_template, request, session, url_for
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:
+    psycopg = None
+    dict_row = None
+from flask import Flask, Response, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash, generate_password_hash
 
 BASE = Path(__file__).resolve().parent
+DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
+if os.getenv('RENDER') and not DATABASE_URL:
+    raise RuntimeError('DATABASE_URL obrigatoria no Render. Configure Neon PostgreSQL.')
 DB = Path(os.getenv('DATABASE_PATH', str(BASE / 'instance' / 'turnos.db')))
-DB.parent.mkdir(parents=True, exist_ok=True)
+if not DATABASE_URL:
+    DB.parent.mkdir(parents=True, exist_ok=True)
+if DATABASE_URL and not os.getenv('SECRET_KEY'):
+    raise RuntimeError('SECRET_KEY obrigatoria em producao.')
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
-app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE', '0') == '1', PERMANENT_SESSION_LIFETIME=timedelta(hours=10), MAX_CONTENT_LENGTH=30000)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=bool(DATABASE_URL) or os.getenv('COOKIE_SECURE', '0') == '1', PERMANENT_SESSION_LIFETIME=timedelta(hours=10), MAX_CONTENT_LENGTH=30000)
 ITEMS = ['Organização e Limpeza','Insumos disponíveis','Manipulado e acabado liberados','Reatores cheios, quando não possível, kanban disponível','Passagem de turno líder a líder de linha','Apontamento nas linhas atualizado','IBCs disponíveis para envase','Paletes disponíveis para produção','Paletes quebrados no descarte']
 STATUSES = {'ok', 'pending', 'na'}
 
+class PgRow(dict):
+    """Suporta acesso por chave e indice (compatibilidade sqlite3.Row)."""
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+class PgCursor:
+    def __init__(self, cursor, lastrowid=None):
+        self.cursor = cursor
+        self.lastrowid = lastrowid
+        self.rowcount = cursor.rowcount
+    def fetchone(self):
+        row = self.cursor.fetchone()
+        return PgRow(row) if row is not None else None
+    def fetchall(self):
+        return [PgRow(row) for row in self.cursor.fetchall()]
+
+class PgConnection:
+    def __init__(self):
+        self.conn = psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=10)
+    def __enter__(self):
+        self.conn.__enter__()
+        return self
+    def __exit__(self, exc_type, exc_value, traceback):
+        return self.conn.__exit__(exc_type, exc_value, traceback)
+    def execute(self, sql, params=()):
+        statement = sql.replace('?', '%s')
+        is_insert = statement.lstrip().upper().startswith('INSERT INTO USERS') or statement.lstrip().upper().startswith('INSERT INTO RECORDS(')
+        if is_insert and 'RETURNING' not in statement.upper():
+            statement += ' RETURNING id'
+        cursor = self.conn.execute(statement, params)
+        if is_insert:
+            row = cursor.fetchone()
+            return PgCursor(cursor, row['id'] if row else None)
+        return PgCursor(cursor)
+    def executemany(self, sql, params):
+        cursor = self.conn.cursor()
+        cursor.executemany(sql.replace('?', '%s'), params)
+        return PgCursor(cursor)
+
 def db():
+    if DATABASE_URL:
+        if psycopg is None:
+            raise RuntimeError('Instale psycopg[binary].')
+        return PgConnection()
     conn = sqlite3.connect(DB, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.execute('PRAGMA foreign_keys=ON')
@@ -27,11 +84,41 @@ def db():
     return conn
 
 def init_db():
+    if DATABASE_URL:
+        with db() as c:
+            c.execute("""CREATE TABLE IF NOT EXISTS users(
+                id BIGSERIAL PRIMARY KEY, username TEXT NOT NULL UNIQUE, full_name TEXT NOT NULL,
+                password_hash TEXT NOT NULL, role TEXT NOT NULL CHECK(role IN ('admin','user')),
+                active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL)""")
+            c.execute('CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (LOWER(username))')
+            c.execute("""CREATE TABLE IF NOT EXISTS records(
+                id BIGSERIAL PRIMARY KEY, created_by BIGINT NOT NULL REFERENCES users(id),
+                created_at TEXT NOT NULL, shift_date TEXT NOT NULL, shift TEXT NOT NULL,
+                outgoing TEXT NOT NULL, incoming TEXT NOT NULL, sector TEXT NOT NULL,
+                notes TEXT NOT NULL)""")
+            c.execute("""CREATE TABLE IF NOT EXISTS record_items(
+                record_id BIGINT NOT NULL REFERENCES records(id) ON DELETE CASCADE,
+                item_number INTEGER NOT NULL, status TEXT NOT NULL, note TEXT NOT NULL,
+                PRIMARY KEY(record_id,item_number))""")
+    else:
+        with db() as c:
+            c.execute('PRAGMA journal_mode=WAL')
+            c.executescript("""CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT NOT NULL COLLATE NOCASE UNIQUE,full_name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','user')),active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,shift_date TEXT NOT NULL,shift TEXT NOT NULL,outgoing TEXT NOT NULL,incoming TEXT NOT NULL,sector TEXT NOT NULL,notes TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS record_items(record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,item_number INTEGER NOT NULL,status TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(record_id,item_number));""")
+
+def bootstrap_admin():
+    login = os.getenv('INITIAL_ADMIN_USERNAME', '').strip()
+    password = os.getenv('INITIAL_ADMIN_PASSWORD', '')
+    name = os.getenv('INITIAL_ADMIN_NAME', '').strip()
+    if not (login and name and password):
+        return
+    if len(password) < 10 or len(login)>50 or len(name)>100 or not login.replace('_', '').replace('.', '').isalnum():
+        raise RuntimeError('Credenciais iniciais invalidas.')
     with db() as c:
-        c.execute('PRAGMA journal_mode=WAL')
-        c.executescript('''CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT NOT NULL COLLATE NOCASE UNIQUE,full_name TEXT NOT NULL,password_hash TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('admin','user')),active INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS records(id INTEGER PRIMARY KEY,created_by INTEGER NOT NULL REFERENCES users(id),created_at TEXT NOT NULL,shift_date TEXT NOT NULL,shift TEXT NOT NULL,outgoing TEXT NOT NULL,incoming TEXT NOT NULL,sector TEXT NOT NULL,notes TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS record_items(record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,item_number INTEGER NOT NULL,status TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(record_id,item_number));''')
+        if c.execute('SELECT COUNT(*) AS total FROM users').fetchone()['total'] == 0:
+            c.execute('INSERT INTO users(username,full_name,password_hash,role,created_at) VALUES(?,?,?,?,?)',
+                      (login,name,generate_password_hash(password),'admin',now()))
 
 def now(): return datetime.now(timezone.utc).isoformat(timespec='seconds')
 def clean(v, n=100): return v.strip() if isinstance(v,str) and len(v.strip()) <= n else ''
@@ -78,7 +165,7 @@ def login():
     if request.method=='GET': return render_template('login.html',error=None)
     username=clean(request.form.get('username'),50)
     password=request.form.get('password','')
-    with db() as c: u=c.execute('SELECT * FROM users WHERE username=? AND active=1',(username,)).fetchone()
+    with db() as c: u=c.execute('SELECT * FROM users WHERE LOWER(username)=LOWER(?) AND active=1',(username,)).fetchone()
     if not u or not check_password_hash(u['password_hash'],password):
         return render_template('login.html',error='Usuário ou senha incorretos.'),401
     session.clear()
@@ -170,7 +257,7 @@ def add_user():
         with db() as c:
             cur=c.execute('INSERT INTO users(username,full_name,password_hash,role,created_at) VALUES(?,?,?,?,?)',(username,full_name,generate_password_hash(password),role,now()))
         return jsonify(ok=True,id=cur.lastrowid),201
-    except sqlite3.IntegrityError: return jsonify(error='Esse login já está cadastrado.'),409
+    except (sqlite3.IntegrityError, psycopg.IntegrityError if psycopg else sqlite3.IntegrityError): return jsonify(error='Esse login já está cadastrado.'),409
 
 @app.patch('/api/users/<int:uid>')
 @admin
@@ -192,7 +279,14 @@ def edit_user(uid):
     return jsonify(ok=True)
 
 @app.get('/health')
-def health(): return jsonify(status='ok')
+def health():
+    try:
+        with db() as c:
+            c.execute('SELECT 1').fetchone()
+        return jsonify(status='ok')
+    except Exception:
+        app.logger.exception('Falha de banco de dados no health check')
+        return jsonify(status='unavailable'),503
 
 
 INITIAL_USERS = 16
@@ -232,7 +326,7 @@ def setup():
         with db() as c:
             c.executemany('INSERT INTO users(username,full_name,password_hash,role,created_at) VALUES(?,?,?,?,?)',creds)
         print(f'\n{missing} novas contas criadas! Total: {INITIAL_USERS}. Inicie com: python app.py')
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, psycopg.IntegrityError if psycopg else sqlite3.IntegrityError):
         print('Erro: login duplicado. Nenhuma conta nova foi salva.')
 
 def promote_all():
@@ -244,9 +338,10 @@ def promote_all():
     print(f'{count} conta(s) promovida(s). Total de administradores: {total}.')
 
 init_db()
+bootstrap_admin()
 if __name__=='__main__':
     if len(sys.argv)>1 and sys.argv[1]=='setup': setup()
     elif len(sys.argv)>1 and sys.argv[1]=='promote-all': promote_all()
     else:
         if not os.environ.get('SECRET_KEY'): print('AVISO: defina SECRET_KEY no ambiente antes de publicar.')
-        app.run(host='127.0.0.1',port=int(os.getenv('PORT',5000)),debug=False)
+        app.run(host='0.0.0.0',port=int(os.getenv('PORT',5000)),debug=False)

@@ -5,7 +5,7 @@ const $=id=>document.getElementById(id);
 let records=[],activeMonth=null,states=ITEMS.map(()=>({status:'',note:''}));
 const monthFormat=new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric',timeZone:'America/Fortaleza'});
 const timeFormat=new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Fortaleza'});
-const dateInBrazil=iso=>new Date(iso.endsWith('Z')?iso:iso+'Z');
+const dateInBrazil=iso=>new Date(/(Z|[+-]\\d{2}:\\d{2})$/.test(iso)?iso:iso+'Z');
 function monthKey(iso){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'America/Fortaleza',year:'numeric',month:'2-digit'}).formatToParts(dateInBrazil(iso));return parts.find(p=>p.type==='year').value+'-'+parts.find(p=>p.type==='month').value;}
 function monthName(key){return monthFormat.format(new Date(key+'-15T12:00:00Z'));}
 function dateLabel(iso){return timeFormat.format(dateInBrazil(iso));}

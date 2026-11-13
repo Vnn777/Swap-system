@@ -283,8 +283,6 @@ def save_record():
         photos=entry.get('photos',[])
         if not isinstance(photos,list) or len(photos)>MAX_PHOTOS_PER_ITEM:
             return jsonify(error=f'No máximo {MAX_PHOTOS_PER_ITEM} fotos no item {i}.'),400
-        if photos and entry['status']=='ok':
-            return jsonify(error=f'Fotos só são aceitas em Pendente ou Não aplicável (item {i}).'),400
         for photo in photos:
             if not isinstance(photo,str) or not photo.startswith('data:image/jpeg;base64,'):
                 return jsonify(error=f'Formato de foto inválido no item {i}.'),400

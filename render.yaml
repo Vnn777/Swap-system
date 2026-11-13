@@ -11,9 +11,7 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
-      - key: INITIAL_ADMIN_USERNAME
-        sync: false
-      - key: INITIAL_ADMIN_NAME
-        sync: false
-      - key: INITIAL_ADMIN_PASSWORD
+      - key: SHARED_LOGIN
+        value: ADM Produção
+      - key: SHARED_PASSWORD
         sync: false

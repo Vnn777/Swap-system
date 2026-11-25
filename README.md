@@ -35,13 +35,17 @@ A senha configurada em `SHARED_PASSWORD` é usada **somente ao criar a conta**; 
 - Se uma conta antiga tiver exatamente o login `ADM Produção`, será reutilizada (inclusive sua senha atual). Para redefini-la, siga o procedimento de troca de senha.
 
 
-## Linhas 1 a 16 por verificação
+## Linhas 1 a 16, separadas por status
 
-O formulário não possui mais o campo geral **Setor ou linha**. Em cada um dos 9 itens há botões de **Linha 1** até **Linha 16**, permitindo marcar uma ou várias linhas. A situação escolhida (**Conforme**, **Pendente**, **Não aplicável**) se aplica às linhas selecionadas naquele item. É obrigatório selecionar pelo menos uma linha em cada verificação.
+Em cada uma das **9 verificações**, selecione **Conforme**, **Pendente** ou **Não aplicável** e marque apenas as linhas (1 a 16) pertencentes a essa classificação. Ao trocar de status, as linhas das outras classificações **permanecem salvas** no formulário. A mesma linha **não pode aparecer em dois status** do mesmo item: se selecionar uma linha já classificada em outra categoria, ela é movida para a categoria ativa. O botão **Selecionar todas** move as 16 linhas para a categoria ativa após confirmação.
 
-O arquivo mensal mostra as linhas selecionadas dentro dos detalhes de cada checklist; o CSV também inclui as linhas por item. As fotos e relatos continuam vinculados a cada verificação. Ao atualizar o banco, a aplicação adiciona automaticamente o campo `record_items.lines` sem excluir os registros anteriores. Para checklists antigos, aparecerá **"linhas não especificadas"** porque esse dado não era coletado.
+Cada item precisa ter pelo menos uma linha classificada. Se houver uma linha pendente, o relato daquela verificação é obrigatório. Os anexos de fotos continuam associados ao item (até 2 por item), com o relato identificando a linha correspondente.
 
-**Atenção:** a versão atual atribui um único status por item às linhas selecionadas. Se a mesma verificação precisar de estados diferentes para linhas distintas, será necessário um recurso adicional de classificação por linha.
+### Banco de dados
+
+A tabela normalizada `record_item_lines` guarda uma linha por classificação com chave única `(record_id, item_number, line_number)` e `status` dentre `ok`, `pending`, `na`. Essa chave impede duplicações/conflitos por linha e item. A migração cria essa tabela automaticamente sem apagar `records`, `record_items` ou `record_photos`. Os checklists anteriores continuam visíveis usando os dados legados `status` e `lines`.
+
+O histórico mostra os três grupos de linhas em cada item, e o CSV exporta uma linha por status que possua linhas classificadas. Para registros antigos sem identificação de linhas, mantém a indicação de linhas não especificadas.
 
 ## Evidências fotográficas
 

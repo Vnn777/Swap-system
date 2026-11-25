@@ -71,3 +71,14 @@ input:focus,select:focus,textarea:focus{border-color:var(--azul-medio)}
 .evaluated-lines{color:#255e99;font-weight:600;font-size:13px;line-height:1.7;margin:10px 0}
 @media(min-width:900px){.line-grid{grid-template-columns:repeat(8,minmax(0,1fr))}}
 @media(max-width:420px){.line-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:6px}.line-btn{font-size:12px;padding:9px 2px}}
+
+/* Classificação independente por status para cada uma das 16 linhas */
+.status{transition:background .12s,border-color .12s}
+.status[aria-pressed=true]{background:#dcecff;border-color:#1e5fa8;color:#104979}
+.status.pending[aria-pressed=true]{background:#fff0d8;border-color:#d39329;color:#895700}
+.status.na[aria-pressed=true]{background:#e8e7fa;border-color:#6865a6;color:#46458b}
+.line-btn.line-other{border-style:dashed;border-color:#6d86a5;background:#e8edf5;color:#385171}
+.line-legend{font-size:12px;line-height:1.4;color:#53749d;margin:8px 0 0}
+.detail-status-line{display:flex;align-items:flex-start;flex-wrap:wrap;gap:10px;margin:8px 0}
+.detail-status-line .evaluated-lines{flex:1;min-width:180px;margin:3px 0}
+@media(max-width:480px){.detail-status-line{display:block}.detail-status-line .evaluated-lines{margin-top:7px}}

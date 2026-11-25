@@ -297,13 +297,13 @@ def save_record():
     date=clean(data.get('date'),10)
     shift=clean(data.get('shift'),30)
     outgoing=clean(data.get('outgoing'))
-    incoming=clean(data.get('incoming'))
+    incoming=''  # Campo removido do formulario; mantido na tabela para preservar historico.
     sector='Linhas selecionadas'
     notes=clean(data.get('notes'),3000)
     items=data.get('items')
     try: datetime.strptime(date,'%Y-%m-%d')
     except (ValueError,TypeError): return jsonify(error='Data inválida.'),400
-    if shift not in ('Turno A','Turno B','Turno C','Turno D') or not all((outgoing,incoming)) or not isinstance(items,list) or len(items)!=9:
+    if shift not in ('Turno A','Turno B','Turno C','Turno D') or not outgoing or not isinstance(items,list) or len(items)!=9:
         return jsonify(error='Preencha todos os campos e avalie os 9 itens.'),400
     parsed=[]
     photo_rows=[]
@@ -367,7 +367,7 @@ def save_record():
 def export():
     buffer=io.StringIO()
     writer=csv.writer(buffer,delimiter=';')
-    writer.writerow(['ID','Registrado em UTC','Data do turno','Turno','Linhas avaliadas','Responsável pela Vistoria da Linha','Responsáveis ou Líder da Linha','Criado por','Item','Verificação','Status','Pendência/Detalhes','Observações gerais'])
+    writer.writerow(['ID','Registrado em UTC','Data do turno','Turno','Linhas avaliadas','Responsável pela Vistoria da Linha','Criado por','Item','Verificação','Status','Pendência/Detalhes','Observações gerais'])
     with db() as c:
         rows=c.execute('''SELECT r.*,u.full_name author,i.item_number,i.status,i.note,i.lines FROM records r JOIN users u ON u.id=r.created_by JOIN record_items i ON i.record_id=r.id ORDER BY r.id DESC,i.item_number''').fetchall()
     with db() as c:
@@ -389,7 +389,7 @@ def export():
             if not lines and key not in grouped and status!=r['status']:
                 continue
             label=', '.join('Linha '+str(n) for n in lines) or '(registro antigo sem seleção)'
-            writer.writerow([r['id'],r['created_at'],r['shift_date'],r['shift'],label,r['outgoing'],r['incoming'],r['author'],r['item_number'],ITEMS[r['item_number']-1],{'ok':'Conforme','pending':'Pendente','na':'Não aplicável'}[status],r['note'],r['notes']])
+            writer.writerow([r['id'],r['created_at'],r['shift_date'],r['shift'],label,r['outgoing'],r['author'],r['item_number'],ITEMS[r['item_number']-1],{'ok':'Conforme','pending':'Pendente','na':'Não aplicável'}[status],r['note'],r['notes']])
     return Response('\ufeff'+buffer.getvalue(),mimetype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="historico-passagem-turnos.csv"'})
 
 @app.get('/health')

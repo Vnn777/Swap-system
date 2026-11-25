@@ -2,7 +2,7 @@
 const ITEMS=JSON.parse(document.querySelector('#app-data').dataset.items);
 const TOKEN=document.querySelector('meta[name="csrf-token"]').content;
 const $=id=>document.getElementById(id);
-let records=[],activeMonth=null,states=ITEMS.map(()=>({status:'',note:'',photos:[],lines:[]}));
+let records=[],activeMonth=null,states=ITEMS.map(()=>newState());
 const monthFormat=new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric',timeZone:'America/Fortaleza'});
 const timeFormat=new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Fortaleza'});
 const dateInBrazil=iso=>new Date(/(Z|[+-]\d{2}:\d{2})$/.test(iso)?iso:iso+'Z');
@@ -50,85 +50,105 @@ async function preparePhoto(file) {
   return result;
  } finally { if(bitmap.close)bitmap.close(); }
 }
+function newState(){return {active:'ok',note:'',photos:[],line_statuses:{ok:[],pending:[],na:[]}};}
+const statusNames={ok:'Conforme',pending:'Pendente',na:'Não aplicável'};
+function lineTotal(state){return Object.values(state.line_statuses).reduce((sum,lines)=>sum+lines.length,0);}
 function renderItems(){
  const root=$('item-list');root.replaceChildren();
  ITEMS.forEach((title,i)=>{
+  const state=states[i];
   const article=el('article','item');article.append(el('span','item-num',i+1));
   const right=el('div','item-body');right.append(el('strong','item-title',title));
+  const help=el('p','attachment-help','Selecione uma classificação e marque as linhas correspondentes. Cada linha pode pertencer a apenas uma classificação.');
+  right.append(help);
   const options=el('div','options');
   for(const [value,label] of [['ok','Conforme'],['pending','Pendente'],['na','Não aplicável']]){
-   const button=el('button','status '+value,label);
-   button.type='button';button.setAttribute('aria-pressed',String(states[i].status===value));
-   button.onclick=()=>{
-    states[i].status=value;
-    renderItems();
-   };options.append(button);
+   const button=el('button','status '+value,label+' ('+state.line_statuses[value].length+')');
+   button.type='button';button.setAttribute('aria-pressed',String(state.active===value));
+   button.onclick=()=>{state.active=value;renderItems();};
+   options.append(button);
   }
   right.append(options);
   const linesWrap=el('div','line-selector');
   const linesTitle=el('div','line-selector-title');
-  linesTitle.append(el('strong',null,'Linhas avaliadas'),el('small',null,states[i].lines.length+' de 16 selecionadas'));
+  linesTitle.append(el('strong',null,'Linhas — '+statusNames[state.active]),el('small',null,state.line_statuses[state.active].length+' nesta categoria · '+lineTotal(state)+' de 16 no total'));
   linesWrap.append(linesTitle);
   const lineGrid=el('div','line-grid');
   for(let line=1;line<=16;line++){
-    const button=el('button','line-btn','Linha '+line);
-    button.type='button';
-    button.setAttribute('aria-pressed',String(states[i].lines.includes(line)));
-    button.setAttribute('aria-label','Selecionar Linha '+line+' para '+title);
-    button.onclick=()=>{
-      const existing=states[i].lines.indexOf(line);
-      if(existing>=0)states[i].lines.splice(existing,1);
-      else states[i].lines.push(line);
-      button.setAttribute('aria-pressed',String(states[i].lines.includes(line)));
-      linesTitle.querySelector('small').textContent=states[i].lines.length+' de 16 selecionadas';
-    };
-    lineGrid.append(button);
+   const assigned=Object.keys(state.line_statuses).find(key=>state.line_statuses[key].includes(line));
+   const button=el('button','line-btn'+(assigned&&assigned!==state.active?' line-other':''),'Linha '+line);
+   button.type='button';
+   button.setAttribute('aria-pressed',String(assigned===state.active));
+   if(assigned&&assigned!==state.active)button.title='Atualmente em '+statusNames[assigned]+'. Toque para mover.';
+   button.setAttribute('aria-label','Linha '+line+(assigned?' — '+statusNames[assigned]:' — não avaliada'));
+   button.onclick=()=>{
+    if(assigned===state.active){
+      state.line_statuses[state.active]=state.line_statuses[state.active].filter(n=>n!==line);
+    }else{
+      for(const key of Object.keys(state.line_statuses))state.line_statuses[key]=state.line_statuses[key].filter(n=>n!==line);
+      state.line_statuses[state.active].push(line);
+      state.line_statuses[state.active].sort((a,b)=>a-b);
+    }
+    renderItems();
+   };
+   lineGrid.append(button);
   }
   linesWrap.append(lineGrid);
-  const allButton=el('button','line-all-btn','Selecionar todas as 16 linhas');
-  allButton.type='button';allButton.onclick=()=>{states[i].lines=Array.from({length:16},(_,n)=>n+1);renderItems();};
+  const allButton=el('button','line-all-btn','Selecionar todas as 16 como '+statusNames[state.active]);
+  allButton.type='button';
+  allButton.onclick=()=>{
+    if(!confirm('Mover todas as 16 linhas para '+statusNames[state.active]+' neste item?'))return;
+    for(const key of Object.keys(state.line_statuses))state.line_statuses[key]=key===state.active?Array.from({length:16},(_,n)=>n+1):[];
+    renderItems();
+  };
   linesWrap.append(allButton);
+  const legend=el('p','line-legend','Azul: nesta categoria · Contorno: outra categoria · Branco: ainda não avaliada');
+  linesWrap.append(legend);
   right.append(linesWrap);
-  if(states[i].status){
-   const label=el('label','evidence-label','Relato do ocorrido');
-   const note=el('textarea','note');note.value=states[i].note;note.maxLength=500;note.rows=2;
-   note.placeholder=states[i].status==='pending'?'Descreva a pendência e o que foi observado':states[i].status==='na'?'Explique por que esse item não se aplica':'Descreva o que foi conferido (opcional)';
-   note.setAttribute('aria-label','Relato do item '+(i+1));note.oninput=e=>{states[i].note=e.target.value;};
+  if(lineTotal(state)){
+   const label=el('label','evidence-label','Relato do ocorrido'+(state.line_statuses.pending.length?' (obrigatório por haver pendências)':' (opcional)'));
+   const note=el('textarea','note');note.value=state.note;note.maxLength=500;note.rows=2;
+   note.placeholder=state.line_statuses.pending.length?'Descreva as pendências e linhas afetadas':'Descreva o que foi conferido';
+   note.setAttribute('aria-label','Relato do item '+(i+1));note.oninput=e=>{state.note=e.target.value;};
    label.append(note);right.append(label);
    const photoWrap=el('div','photo-attachment');
    photoWrap.append(el('strong','attachment-heading','📷 Anexo de Fotos'));
-   photoWrap.append(el('p','attachment-help','Adicione até 2 fotos como evidência da verificação. Aceita imagens da câmera ou galeria.'));
+   photoWrap.append(el('p','attachment-help','Até 2 fotos por verificação, independentemente da classificação. Identifique a linha no relato.'));
    const gallery=el('div','photo-previews');
-   for(const [n,src] of states[i].photos.entries()){
-    const tile=el('div','photo-preview');const img=el('img');img.src=src;img.alt='Foto anexada '+(n+1)+' ao item '+(i+1);img.loading='lazy';
-    const remove=el('button','remove-photo','Remover');remove.type='button';remove.setAttribute('aria-label','Remover foto '+(n+1));
-    remove.onclick=()=>{states[i].photos.splice(n,1);renderItems();};
+   for(const [n,src] of state.photos.entries()){
+    const tile=el('div','photo-preview'),img=el('img');
+    img.src=src;img.alt='Foto anexada '+(n+1)+' ao item '+(i+1);img.loading='lazy';
+    const remove=el('button','remove-photo','Remover');remove.type='button';remove.onclick=()=>{state.photos.splice(n,1);renderItems();};
     tile.append(img,remove);gallery.append(tile);
    }
    photoWrap.append(gallery);
-   const input=el('input','photo-input');input.type='file';input.accept='image/*';input.multiple=true;
-   input.setAttribute('aria-label','Anexar fotos ao item '+(i+1));
+   const input=el('input','photo-input');input.type='file';input.accept='image/*';input.multiple=true;input.setAttribute('aria-label','Anexar fotos ao item '+(i+1));
    input.onchange=async e=>{
     const files=Array.from(e.target.files||[]);
-    if(files.length+states[i].photos.length>2){alert('Você pode anexar no máximo 2 fotos por item.');return;}
-    try{
-     const imageData=[];
-     for(const file of files)imageData.push(await preparePhoto(file));
-     states[i].photos.push(...imageData);
-     renderItems();
-    }catch(err){alert(err.message);input.value='';}
+    if(files.length+state.photos.length>2){alert('Você pode anexar no máximo 2 fotos por verificação.');return;}
+    try{const imageData=[];for(const file of files)imageData.push(await preparePhoto(file));state.photos.push(...imageData);renderItems();}
+    catch(err){alert(err.message);input.value='';}
    };
-   if(states[i].photos.length<2)photoWrap.append(input);
+   if(state.photos.length<2)photoWrap.append(input);
    right.append(photoWrap);
   }
   article.append(right);root.append(article);
  });
- $('progress').textContent=states.filter(s=>s.status).length+' de 9 avaliados';
+ $('progress').textContent=states.filter(s=>lineTotal(s)>0).length+' de 9 avaliados';
 }
-function openForm(){$('checklist-form').reset();const now=new Date();$('date').value=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');states=ITEMS.map(()=>({status:'',note:'',photos:[],lines:[]}));notice('save-feedback','');renderItems();show('form');}
+function openForm(){$('checklist-form').reset();const now=new Date();$('date').value=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');states=ITEMS.map(()=>newState());notice('save-feedback','');renderItems();show('form');}
 $('checklist-form').onsubmit=async e=>{e.preventDefault();const payload={date:$('date').value,shift:$('shift').value,outgoing:$('outgoing').value,incoming:$('incoming').value,notes:$('notes').value,items:states};const btn=$('save-btn');btn.disabled=true;try{const result=await api('/api/records',{method:'POST',body:JSON.stringify(payload)});await loadArchive();show('library');notice('library-feedback','Checklist #'+result.id+' salvo com sucesso! Abra a pasta do mês para consultá-lo.');}catch(err){notice('save-feedback',err.message,true);}finally{btn.disabled=false;}};
 async function openDetail(id){try{const result=await api('/api/records/'+id);const r=result.record;const root=$('detail-content');root.replaceChildren();$('detail-title').textContent='Checklist #'+r.id;$('detail-datetime').textContent='Salvo em '+dateLabel(r.created_at);
-const grid=el('div','detail-grid');for(const [label,value] of [['Data do turno',r.shift_date.split('-').reverse().join('/')],['Turno',r.shift],['Responsável pela Vistoria da Linha',r.outgoing],['Responsáveis ou Líder da Linha',r.incoming]]){const field=el('div','detail-field');field.append(el('small',null,label),el('strong',null,value));grid.append(field);}root.append(grid,el('h2',null,'Itens verificados'));const list=el('ol','detail-items');for(const item of result.items){const li=el('li');li.append(el('strong',null,ITEMS[item.item_number-1]),el('span','pill'+(item.status==='pending'?' warn':''),({ok:'Conforme',pending:'Pendente',na:'Não aplicável'})[item.status]));li.append(el('p','evaluated-lines',Array.isArray(item.lines)&&item.lines.length?item.lines.map(n=>'Linha '+n).join(' · '):'Registro anterior: linhas não especificadas'));if(item.note)li.append(el('p','muted',item.note));
+const grid=el('div','detail-grid');for(const [label,value] of [['Data do turno',r.shift_date.split('-').reverse().join('/')],['Turno',r.shift],['Responsável pela Vistoria da Linha',r.outgoing],['Responsáveis ou Líder da Linha',r.incoming]]){const field=el('div','detail-field');field.append(el('small',null,label),el('strong',null,value));grid.append(field);}root.append(grid,el('h2',null,'Itens verificados'));const list=el('ol','detail-items');for(const item of result.items){const li=el('li');li.append(el('strong',null,ITEMS[item.item_number-1]));
+ const groups=item.line_statuses||{ok:[],pending:[],na:[]};
+ for(const status of ['ok','pending','na']){
+  const lines=groups[status]||[];
+  if(!lines.length)continue;
+  const summary=el('div','detail-status-line');
+  summary.append(el('span','pill'+(status==='pending'?' warn':''),statusNames[status]),el('p','evaluated-lines',lines.map(n=>'Linha '+n).join(' · ')));
+  li.append(summary);
+ }
+ if(!Object.values(groups).some(x=>x.length))li.append(el('p','evaluated-lines','Registro antigo: linhas não especificadas'));if(item.note)li.append(el('p','muted',item.note));
 if(item.photos&&item.photos.length){
  const photos=el('div','archived-photos');
  for(const photo of item.photos){

@@ -2,6 +2,7 @@ import csv
 import base64
 import binascii
 import io
+import json
 import os
 import secrets
 import sqlite3
@@ -116,6 +117,7 @@ def init_db():
                 FOREIGN KEY(record_id,item_number) REFERENCES record_items(record_id,item_number) ON DELETE CASCADE
             )""")
             c.execute('CREATE INDEX IF NOT EXISTS record_photos_record_idx ON record_photos(record_id)')
+            c.execute("ALTER TABLE record_items ADD COLUMN IF NOT EXISTS lines TEXT NOT NULL DEFAULT '[]'")
     else:
         with db() as c:
             c.execute('PRAGMA journal_mode=WAL')
@@ -124,6 +126,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS record_items(record_id INTEGER NOT NULL REFERENCES records(id) ON DELETE CASCADE,item_number INTEGER NOT NULL,status TEXT NOT NULL,note TEXT NOT NULL,PRIMARY KEY(record_id,item_number));
             CREATE TABLE IF NOT EXISTS record_photos(id INTEGER PRIMARY KEY,record_id INTEGER NOT NULL,item_number INTEGER NOT NULL,mime_type TEXT NOT NULL,content BLOB NOT NULL,created_at TEXT NOT NULL,FOREIGN KEY(record_id,item_number) REFERENCES record_items(record_id,item_number) ON DELETE CASCADE);
             CREATE INDEX IF NOT EXISTS record_photos_record_idx ON record_photos(record_id);""")
+            if not any(row[1] == "lines" for row in c.execute("PRAGMA table_info(record_items)").fetchall()):
+                c.execute("ALTER TABLE record_items ADD COLUMN lines TEXT NOT NULL DEFAULT '[]'")
 
 def bootstrap_shared():
     """Cria uma conta compartilhada e bloqueia contas antigas sem apagar checklists."""
@@ -234,12 +238,12 @@ def record_detail(rid):
     with db() as c:
         r=c.execute('SELECT r.*,u.full_name AS author FROM records r JOIN users u ON u.id=r.created_by WHERE r.id=?',(rid,)).fetchone()
         if not r: return jsonify(error='Registro não encontrado.'),404
-        items=c.execute('SELECT item_number,status,note FROM record_items WHERE record_id=? ORDER BY item_number',(rid,)).fetchall()
+        items=c.execute('SELECT item_number,status,note,lines FROM record_items WHERE record_id=? ORDER BY item_number',(rid,)).fetchall()
         photos=c.execute('SELECT id,item_number FROM record_photos WHERE record_id=? ORDER BY id',(rid,)).fetchall()
     by_item = {}
     for p in photos:
         by_item.setdefault(p['item_number'],[]).append({'id':p['id'],'url':url_for('photo_file',rid=rid,pid=p['id'])})
-    return jsonify(record=dict(r),items=[{**dict(i),'photos':by_item.get(i['item_number'],[])} for i in items])
+    return jsonify(record=dict(r),items=[{**dict(i),'lines':json.loads(i['lines'] or '[]'),'photos':by_item.get(i['item_number'],[])} for i in items])
 
 @app.get('/api/records/<int:rid>/photos/<int:pid>')
 @auth
@@ -265,18 +269,23 @@ def save_record():
     shift=clean(data.get('shift'),30)
     outgoing=clean(data.get('outgoing'))
     incoming=clean(data.get('incoming'))
-    sector=clean(data.get('sector'))
+    sector='Linhas selecionadas'
     notes=clean(data.get('notes'),3000)
     items=data.get('items')
     try: datetime.strptime(date,'%Y-%m-%d')
     except (ValueError,TypeError): return jsonify(error='Data inválida.'),400
-    if shift not in ('Turno A','Turno B','Turno C','Turno D') or not all((outgoing,incoming,sector)) or not isinstance(items,list) or len(items)!=9:
+    if shift not in ('Turno A','Turno B','Turno C','Turno D') or not all((outgoing,incoming)) or not isinstance(items,list) or len(items)!=9:
         return jsonify(error='Preencha todos os campos e avalie os 9 itens.'),400
     parsed=[]
     photo_rows=[]
     for i,entry in enumerate(items,1):
         if not isinstance(entry,dict) or entry.get('status') not in STATUSES:
             return jsonify(error=f'Avalie o item {i}.'),400
+        lines=entry.get('lines',[])
+        if (not isinstance(lines,list) or not lines or len(lines)>16 or
+            any(type(line) is not int or not 1<=line<=16 for line in lines) or
+            len(set(lines))!=len(lines)):
+            return jsonify(error=f'Selecione as linhas de 1 a 16 no item {i}.'),400
         note=clean(entry.get('note',''),500)
         if entry['status']=='pending' and not note:
             return jsonify(error=f'Descreva a pendência do item {i}.'),400
@@ -299,10 +308,10 @@ def save_record():
             photo_rows.append((i,'image/jpeg',raw,now()))
         if len(photo_rows)>MAX_PHOTOS_PER_RECORD:
             return jsonify(error='Limite de 10 fotos por checklist.'),400
-        parsed.append((i,entry['status'],note))
+        parsed.append((i,entry['status'],note,json.dumps(sorted(lines))))
     with db() as c:
         cur=c.execute('INSERT INTO records(created_by,created_at,shift_date,shift,outgoing,incoming,sector,notes) VALUES(?,?,?,?,?,?,?,?)',(user()['id'],now(),date,shift,outgoing,incoming,sector,notes))
-        c.executemany('INSERT INTO record_items(record_id,item_number,status,note) VALUES(?,?,?,?)',[(cur.lastrowid,*p) for p in parsed])
+        c.executemany('INSERT INTO record_items(record_id,item_number,status,note,lines) VALUES(?,?,?,?,?)',[(cur.lastrowid,*p) for p in parsed])
         if photo_rows:
             c.executemany('INSERT INTO record_photos(record_id,item_number,mime_type,content,created_at) VALUES(?,?,?,?,?)',
                           [(cur.lastrowid,*p) for p in photo_rows])
@@ -314,11 +323,11 @@ def save_record():
 def export():
     buffer=io.StringIO()
     writer=csv.writer(buffer,delimiter=';')
-    writer.writerow(['ID','Registrado em UTC','Data do turno','Turno','Setor/Linha','Responsável pela Vistoria da Linha','Responsáveis ou Líder da Linha','Criado por','Item','Verificação','Status','Pendência/Detalhes','Observações gerais'])
+    writer.writerow(['ID','Registrado em UTC','Data do turno','Turno','Linhas avaliadas','Responsável pela Vistoria da Linha','Responsáveis ou Líder da Linha','Criado por','Item','Verificação','Status','Pendência/Detalhes','Observações gerais'])
     with db() as c:
-        rows=c.execute('''SELECT r.*,u.full_name author,i.item_number,i.status,i.note FROM records r JOIN users u ON u.id=r.created_by JOIN record_items i ON i.record_id=r.id ORDER BY r.id DESC,i.item_number''').fetchall()
+        rows=c.execute('''SELECT r.*,u.full_name author,i.item_number,i.status,i.note,i.lines FROM records r JOIN users u ON u.id=r.created_by JOIN record_items i ON i.record_id=r.id ORDER BY r.id DESC,i.item_number''').fetchall()
     for r in rows:
-        writer.writerow([r['id'],r['created_at'],r['shift_date'],r['shift'],r['sector'],r['outgoing'],r['incoming'],r['author'],r['item_number'],ITEMS[r['item_number']-1],{'ok':'Conforme','pending':'Pendente','na':'Não aplicável'}[r['status']],r['note'],r['notes']])
+        writer.writerow([r['id'],r['created_at'],r['shift_date'],r['shift'],', '.join('Linha '+str(n) for n in json.loads(r['lines'] or '[]')) or '(registro antigo sem seleção)',r['outgoing'],r['incoming'],r['author'],r['item_number'],ITEMS[r['item_number']-1],{'ok':'Conforme','pending':'Pendente','na':'Não aplicável'}[r['status']],r['note'],r['notes']])
     return Response('\ufeff'+buffer.getvalue(),mimetype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="historico-passagem-turnos.csv"'})
 
 @app.get('/health')

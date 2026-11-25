@@ -35,6 +35,14 @@ A senha configurada em `SHARED_PASSWORD` é usada **somente ao criar a conta**; 
 - Se uma conta antiga tiver exatamente o login `ADM Produção`, será reutilizada (inclusive sua senha atual). Para redefini-la, siga o procedimento de troca de senha.
 
 
+## Linhas 1 a 16 por verificação
+
+O formulário não possui mais o campo geral **Setor ou linha**. Em cada um dos 9 itens há botões de **Linha 1** até **Linha 16**, permitindo marcar uma ou várias linhas. A situação escolhida (**Conforme**, **Pendente**, **Não aplicável**) se aplica às linhas selecionadas naquele item. É obrigatório selecionar pelo menos uma linha em cada verificação.
+
+O arquivo mensal mostra as linhas selecionadas dentro dos detalhes de cada checklist; o CSV também inclui as linhas por item. As fotos e relatos continuam vinculados a cada verificação. Ao atualizar o banco, a aplicação adiciona automaticamente o campo `record_items.lines` sem excluir os registros anteriores. Para checklists antigos, aparecerá **"linhas não especificadas"** porque esse dado não era coletado.
+
+**Atenção:** a versão atual atribui um único status por item às linhas selecionadas. Se a mesma verificação precisar de estados diferentes para linhas distintas, será necessário um recurso adicional de classificação por linha.
+
 ## Evidências fotográficas
 
 Nos itens **Conforme**, **Pendente** e **Não aplicável**, o formulário mostra **Relato do ocorrido** e **Anexo de Fotos**. O relato é opcional para itens conformes e não aplicáveis e obrigatório para pendências. É possível anexar até **2 fotos por item**, com limite de **10 fotos por checklist**. As fotos são reduzidas para JPEG no navegador (até 1.280 px e 600 KB cada), validadas no servidor e armazenadas diretamente no **PostgreSQL Neon**, na tabela `record_photos`. Quando o checklist for aberto pela pasta mensal, as fotos aparecerão abaixo do respectivo item.

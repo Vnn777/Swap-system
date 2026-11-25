@@ -118,6 +118,14 @@ def init_db():
             )""")
             c.execute('CREATE INDEX IF NOT EXISTS record_photos_record_idx ON record_photos(record_id)')
             c.execute("ALTER TABLE record_items ADD COLUMN IF NOT EXISTS lines TEXT NOT NULL DEFAULT '[]'")
+            c.execute("""CREATE TABLE IF NOT EXISTS record_item_lines(
+                record_id BIGINT NOT NULL,
+                item_number INTEGER NOT NULL,
+                line_number INTEGER NOT NULL CHECK(line_number BETWEEN 1 AND 16),
+                status TEXT NOT NULL CHECK(status IN ('ok','pending','na')),
+                PRIMARY KEY(record_id,item_number,line_number),
+                FOREIGN KEY(record_id,item_number) REFERENCES record_items(record_id,item_number) ON DELETE CASCADE
+            )""")
     else:
         with db() as c:
             c.execute('PRAGMA journal_mode=WAL')
@@ -128,6 +136,14 @@ def init_db():
             CREATE INDEX IF NOT EXISTS record_photos_record_idx ON record_photos(record_id);""")
             if not any(row[1] == "lines" for row in c.execute("PRAGMA table_info(record_items)").fetchall()):
                 c.execute("ALTER TABLE record_items ADD COLUMN lines TEXT NOT NULL DEFAULT '[]'")
+            c.execute("""CREATE TABLE IF NOT EXISTS record_item_lines(
+                record_id INTEGER NOT NULL,
+                item_number INTEGER NOT NULL,
+                line_number INTEGER NOT NULL CHECK(line_number BETWEEN 1 AND 16),
+                status TEXT NOT NULL CHECK(status IN ('ok','pending','na')),
+                PRIMARY KEY(record_id,item_number,line_number),
+                FOREIGN KEY(record_id,item_number) REFERENCES record_items(record_id,item_number) ON DELETE CASCADE
+            )""")
 
 def bootstrap_shared():
     """Cria uma conta compartilhada e bloqueia contas antigas sem apagar checklists."""
@@ -239,11 +255,24 @@ def record_detail(rid):
         r=c.execute('SELECT r.*,u.full_name AS author FROM records r JOIN users u ON u.id=r.created_by WHERE r.id=?',(rid,)).fetchone()
         if not r: return jsonify(error='Registro não encontrado.'),404
         items=c.execute('SELECT item_number,status,note,lines FROM record_items WHERE record_id=? ORDER BY item_number',(rid,)).fetchall()
+        line_rows=c.execute('SELECT item_number,line_number,status FROM record_item_lines WHERE record_id=? ORDER BY item_number,line_number',(rid,)).fetchall()
         photos=c.execute('SELECT id,item_number FROM record_photos WHERE record_id=? ORDER BY id',(rid,)).fetchall()
+    by_status = {}
+    for line in line_rows:
+        groups=by_status.setdefault(line['item_number'],{'ok':[],'pending':[],'na':[]})
+        groups[line['status']].append(line['line_number'])
     by_item = {}
     for p in photos:
         by_item.setdefault(p['item_number'],[]).append({'id':p['id'],'url':url_for('photo_file',rid=rid,pid=p['id'])})
-    return jsonify(record=dict(r),items=[{**dict(i),'lines':json.loads(i['lines'] or '[]'),'photos':by_item.get(i['item_number'],[])} for i in items])
+    def details(i):
+        old_lines=json.loads(i['lines'] or '[]')
+        groups=by_status.get(i['item_number'])
+        if groups is None:
+            groups={'ok':[],'pending':[],'na':[]}
+            if old_lines:
+                groups[i['status']]=old_lines
+        return {**dict(i),'lines':old_lines,'line_statuses':groups,'photos':by_item.get(i['item_number'],[])}
+    return jsonify(record=dict(r),items=[details(i) for i in items])
 
 @app.get('/api/records/<int:rid>/photos/<int:pid>')
 @auth
@@ -278,16 +307,28 @@ def save_record():
         return jsonify(error='Preencha todos os campos e avalie os 9 itens.'),400
     parsed=[]
     photo_rows=[]
+    classified_rows=[]
     for i,entry in enumerate(items,1):
-        if not isinstance(entry,dict) or entry.get('status') not in STATUSES:
+        if not isinstance(entry,dict):
             return jsonify(error=f'Avalie o item {i}.'),400
-        lines=entry.get('lines',[])
-        if (not isinstance(lines,list) or not lines or len(lines)>16 or
-            any(type(line) is not int or not 1<=line<=16 for line in lines) or
-            len(set(lines))!=len(lines)):
-            return jsonify(error=f'Selecione as linhas de 1 a 16 no item {i}.'),400
+        groups=entry.get('line_statuses')
+        if not isinstance(groups,dict) or set(groups)!=STATUSES:
+            return jsonify(error=f'Classifique as linhas no item {i}.'),400
+        all_lines=set()
+        for status in ('ok','pending','na'):
+            lines=groups[status]
+            if not isinstance(lines,list) or len(lines)>16:
+                return jsonify(error=f'Linhas inválidas no item {i}.'),400
+            if any(type(line) is not int or not 1<=line<=16 for line in lines):
+                return jsonify(error=f'Use linhas de 1 a 16 no item {i}.'),400
+            if len(set(lines))!=len(lines) or all_lines.intersection(lines):
+                return jsonify(error=f'Uma linha não pode ter duas classificações no item {i}.'),400
+            all_lines.update(lines)
+            classified_rows.extend((i,line,status) for line in sorted(lines))
+        if not all_lines:
+            return jsonify(error=f'Selecione pelo menos uma linha no item {i}.'),400
         note=clean(entry.get('note',''),500)
-        if entry['status']=='pending' and not note:
+        if groups['pending'] and not note:
             return jsonify(error=f'Descreva a pendência do item {i}.'),400
         photos=entry.get('photos',[])
         if not isinstance(photos,list) or len(photos)>MAX_PHOTOS_PER_ITEM:
@@ -308,10 +349,13 @@ def save_record():
             photo_rows.append((i,'image/jpeg',raw,now()))
         if len(photo_rows)>MAX_PHOTOS_PER_RECORD:
             return jsonify(error='Limite de 10 fotos por checklist.'),400
-        parsed.append((i,entry['status'],note,json.dumps(sorted(lines))))
+        summary_status='pending' if groups['pending'] else ('na' if groups['na'] and not groups['ok'] else 'ok')
+        parsed.append((i,summary_status,note,json.dumps(sorted(all_lines))))
     with db() as c:
         cur=c.execute('INSERT INTO records(created_by,created_at,shift_date,shift,outgoing,incoming,sector,notes) VALUES(?,?,?,?,?,?,?,?)',(user()['id'],now(),date,shift,outgoing,incoming,sector,notes))
         c.executemany('INSERT INTO record_items(record_id,item_number,status,note,lines) VALUES(?,?,?,?,?)',[(cur.lastrowid,*p) for p in parsed])
+        c.executemany('INSERT INTO record_item_lines(record_id,item_number,line_number,status) VALUES(?,?,?,?)',
+                      [(cur.lastrowid,*p) for p in classified_rows])
         if photo_rows:
             c.executemany('INSERT INTO record_photos(record_id,item_number,mime_type,content,created_at) VALUES(?,?,?,?,?)',
                           [(cur.lastrowid,*p) for p in photo_rows])
@@ -326,8 +370,26 @@ def export():
     writer.writerow(['ID','Registrado em UTC','Data do turno','Turno','Linhas avaliadas','Responsável pela Vistoria da Linha','Responsáveis ou Líder da Linha','Criado por','Item','Verificação','Status','Pendência/Detalhes','Observações gerais'])
     with db() as c:
         rows=c.execute('''SELECT r.*,u.full_name author,i.item_number,i.status,i.note,i.lines FROM records r JOIN users u ON u.id=r.created_by JOIN record_items i ON i.record_id=r.id ORDER BY r.id DESC,i.item_number''').fetchall()
+    with db() as c:
+        line_rows=c.execute('SELECT record_id,item_number,line_number,status FROM record_item_lines ORDER BY record_id,item_number,line_number').fetchall()
+    grouped={}
+    for line in line_rows:
+        key=(line['record_id'],line['item_number'])
+        grouped.setdefault(key,{'ok':[],'pending':[],'na':[]})[line['status']].append(line['line_number'])
     for r in rows:
-        writer.writerow([r['id'],r['created_at'],r['shift_date'],r['shift'],', '.join('Linha '+str(n) for n in json.loads(r['lines'] or '[]')) or '(registro antigo sem seleção)',r['outgoing'],r['incoming'],r['author'],r['item_number'],ITEMS[r['item_number']-1],{'ok':'Conforme','pending':'Pendente','na':'Não aplicável'}[r['status']],r['note'],r['notes']])
+        key=(r['id'],r['item_number'])
+        groups=grouped.get(key)
+        if groups is None:
+            groups={'ok':[],'pending':[],'na':[]}
+            groups[r['status']]=json.loads(r['lines'] or '[]')
+        for status in ('ok','pending','na'):
+            lines=groups[status]
+            if not lines and key in grouped:
+                continue
+            if not lines and key not in grouped and status!=r['status']:
+                continue
+            label=', '.join('Linha '+str(n) for n in lines) or '(registro antigo sem seleção)'
+            writer.writerow([r['id'],r['created_at'],r['shift_date'],r['shift'],label,r['outgoing'],r['incoming'],r['author'],r['item_number'],ITEMS[r['item_number']-1],{'ok':'Conforme','pending':'Pendente','na':'Não aplicável'}[status],r['note'],r['notes']])
     return Response('\ufeff'+buffer.getvalue(),mimetype='text/csv; charset=utf-8',headers={'Content-Disposition':'attachment; filename="historico-passagem-turnos.csv"'})
 
 @app.get('/health')

@@ -27,14 +27,13 @@
 
 <section id="form-screen" class="hidden">
   <button id="back-form" class="back" type="button">← Voltar ao arquivo</button>
-  <div class="heading"><div><p class="eyebrow">NOVA PASSAGEM DE TURNO</p><h1>Criar checklist</h1><p class="muted">Preencha os 9 itens. Após salvar, a lista ficará disponível para todos que acessarem esta conta.</p></div></div>
+  <div class="heading"><div><p class="eyebrow">NOVA PASSAGEM DE TURNO</p><h1>Criar checklist</h1><p class="muted">Avalie os 9 itens e selecione uma ou mais linhas (1 a 16) em cada verificação. Depois salve a lista no arquivo mensal.</p></div></div>
   <form id="checklist-form">
     <section class="panel"><h2>Dados do turno</h2><div class="fields">
       <label>Data do turno<input id="date" type="date" required></label>
       <label>Turno<select id="shift" required><option value="">Selecionar</option><option>Turno A</option><option>Turno B</option><option>Turno C</option><option>Turno D</option></select></label>
       <label>Responsável pela Vistoria da Linha:<input id="outgoing" maxlength="100" required></label>
       <label>Responsáveis ou Líder da Linha:<input id="incoming" maxlength="100" required></label>
-      <label class="wide">Setor ou linha<input id="sector" maxlength="100" required placeholder="Ex.: Produção · Linha 01"></label>
     </div></section>
     <section class="panel"><div class="panel-heading"><h2>Verificações</h2><span id="progress">0 de 9 avaliados</span></div><div id="item-list"></div></section>
     <section class="panel"><h2>Observações gerais</h2><textarea id="notes" rows="4" maxlength="3000" placeholder="Informações importantes para o próximo turno"></textarea></section>

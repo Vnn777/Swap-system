@@ -2,7 +2,7 @@
 const ITEMS=JSON.parse(document.querySelector('#app-data').dataset.items);
 const TOKEN=document.querySelector('meta[name="csrf-token"]').content;
 const $=id=>document.getElementById(id);
-let records=[],activeMonth=null,states=ITEMS.map(()=>({status:'',note:'',photos:[]}));
+let records=[],activeMonth=null,states=ITEMS.map(()=>({status:'',note:'',photos:[],lines:[]}));
 const monthFormat=new Intl.DateTimeFormat('pt-BR',{month:'long',year:'numeric',timeZone:'America/Fortaleza'});
 const timeFormat=new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Fortaleza'});
 const dateInBrazil=iso=>new Date(/(Z|[+-]\d{2}:\d{2})$/.test(iso)?iso:iso+'Z');
@@ -27,7 +27,7 @@ function renderArchive(){
  }
 }
 function openMonth(key){activeMonth=key;const subset=records.filter(r=>monthKey(r.created_at)===key);$('month-title').textContent=monthName(key);$('month-subtitle').textContent=subset.length+' checklist(s) salvos nesta pasta';const root=$('month-records');root.replaceChildren();
- for(const r of subset){const btn=el('button','record'),main=el('span','record-info'),date=el('strong',null,r.sector+' · '+r.shift),details=el('small',null,'Salvo em '+dateLabel(r.created_at)+' · Turno de '+r.shift_date.split('-').reverse().join('/'));main.append(date,details);const side=el('span','pill'+(r.pending_count?' warn':''),r.pending_count?r.pending_count+' pendência(s)':'Sem pendências');btn.append(main,side,el('span','arrow','→'));btn.type='button';btn.onclick=()=>openDetail(r.id);root.append(btn);}
+ for(const r of subset){const btn=el('button','record'),main=el('span','record-info'),date=el('strong',null,r.shift),details=el('small',null,'Salvo em '+dateLabel(r.created_at)+' · Turno de '+r.shift_date.split('-').reverse().join('/'));main.append(date,details);const side=el('span','pill'+(r.pending_count?' warn':''),r.pending_count?r.pending_count+' pendência(s)':'Sem pendências');btn.append(main,side,el('span','arrow','→'));btn.type='button';btn.onclick=()=>openDetail(r.id);root.append(btn);}
  show('month');
 }
 async function preparePhoto(file) {
@@ -65,6 +65,30 @@ function renderItems(){
    };options.append(button);
   }
   right.append(options);
+  const linesWrap=el('div','line-selector');
+  const linesTitle=el('div','line-selector-title');
+  linesTitle.append(el('strong',null,'Linhas avaliadas'),el('small',null,states[i].lines.length+' de 16 selecionadas'));
+  linesWrap.append(linesTitle);
+  const lineGrid=el('div','line-grid');
+  for(let line=1;line<=16;line++){
+    const button=el('button','line-btn','Linha '+line);
+    button.type='button';
+    button.setAttribute('aria-pressed',String(states[i].lines.includes(line)));
+    button.setAttribute('aria-label','Selecionar Linha '+line+' para '+title);
+    button.onclick=()=>{
+      const existing=states[i].lines.indexOf(line);
+      if(existing>=0)states[i].lines.splice(existing,1);
+      else states[i].lines.push(line);
+      button.setAttribute('aria-pressed',String(states[i].lines.includes(line)));
+      linesTitle.querySelector('small').textContent=states[i].lines.length+' de 16 selecionadas';
+    };
+    lineGrid.append(button);
+  }
+  linesWrap.append(lineGrid);
+  const allButton=el('button','line-all-btn','Selecionar todas as 16 linhas');
+  allButton.type='button';allButton.onclick=()=>{states[i].lines=Array.from({length:16},(_,n)=>n+1);renderItems();};
+  linesWrap.append(allButton);
+  right.append(linesWrap);
   if(states[i].status){
    const label=el('label','evidence-label','Relato do ocorrido');
    const note=el('textarea','note');note.value=states[i].note;note.maxLength=500;note.rows=2;
@@ -101,10 +125,10 @@ function renderItems(){
  });
  $('progress').textContent=states.filter(s=>s.status).length+' de 9 avaliados';
 }
-function openForm(){$('checklist-form').reset();const now=new Date();$('date').value=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');states=ITEMS.map(()=>({status:'',note:'',photos:[]}));notice('save-feedback','');renderItems();show('form');}
-$('checklist-form').onsubmit=async e=>{e.preventDefault();const payload={date:$('date').value,shift:$('shift').value,outgoing:$('outgoing').value,incoming:$('incoming').value,sector:$('sector').value,notes:$('notes').value,items:states};const btn=$('save-btn');btn.disabled=true;try{const result=await api('/api/records',{method:'POST',body:JSON.stringify(payload)});await loadArchive();show('library');notice('library-feedback','Checklist #'+result.id+' salvo com sucesso! Abra a pasta do mês para consultá-lo.');}catch(err){notice('save-feedback',err.message,true);}finally{btn.disabled=false;}};
+function openForm(){$('checklist-form').reset();const now=new Date();$('date').value=now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');states=ITEMS.map(()=>({status:'',note:'',photos:[],lines:[]}));notice('save-feedback','');renderItems();show('form');}
+$('checklist-form').onsubmit=async e=>{e.preventDefault();const payload={date:$('date').value,shift:$('shift').value,outgoing:$('outgoing').value,incoming:$('incoming').value,notes:$('notes').value,items:states};const btn=$('save-btn');btn.disabled=true;try{const result=await api('/api/records',{method:'POST',body:JSON.stringify(payload)});await loadArchive();show('library');notice('library-feedback','Checklist #'+result.id+' salvo com sucesso! Abra a pasta do mês para consultá-lo.');}catch(err){notice('save-feedback',err.message,true);}finally{btn.disabled=false;}};
 async function openDetail(id){try{const result=await api('/api/records/'+id);const r=result.record;const root=$('detail-content');root.replaceChildren();$('detail-title').textContent='Checklist #'+r.id;$('detail-datetime').textContent='Salvo em '+dateLabel(r.created_at);
-const grid=el('div','detail-grid');for(const [label,value] of [['Data do turno',r.shift_date.split('-').reverse().join('/')],['Turno',r.shift],['Setor/Linha',r.sector],['Responsável pela Vistoria da Linha',r.outgoing],['Responsáveis ou Líder da Linha',r.incoming]]){const field=el('div','detail-field');field.append(el('small',null,label),el('strong',null,value));grid.append(field);}root.append(grid,el('h2',null,'Itens verificados'));const list=el('ol','detail-items');for(const item of result.items){const li=el('li');li.append(el('strong',null,ITEMS[item.item_number-1]),el('span','pill'+(item.status==='pending'?' warn':''),({ok:'Conforme',pending:'Pendente',na:'Não aplicável'})[item.status]));if(item.note)li.append(el('p','muted',item.note));
+const grid=el('div','detail-grid');for(const [label,value] of [['Data do turno',r.shift_date.split('-').reverse().join('/')],['Turno',r.shift],['Responsável pela Vistoria da Linha',r.outgoing],['Responsáveis ou Líder da Linha',r.incoming]]){const field=el('div','detail-field');field.append(el('small',null,label),el('strong',null,value));grid.append(field);}root.append(grid,el('h2',null,'Itens verificados'));const list=el('ol','detail-items');for(const item of result.items){const li=el('li');li.append(el('strong',null,ITEMS[item.item_number-1]),el('span','pill'+(item.status==='pending'?' warn':''),({ok:'Conforme',pending:'Pendente',na:'Não aplicável'})[item.status]));li.append(el('p','evaluated-lines',Array.isArray(item.lines)&&item.lines.length?item.lines.map(n=>'Linha '+n).join(' · '):'Registro anterior: linhas não especificadas'));if(item.note)li.append(el('p','muted',item.note));
 if(item.photos&&item.photos.length){
  const photos=el('div','archived-photos');
  for(const photo of item.photos){

@@ -3,12 +3,12 @@
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="csrf-token" content="{{ csrf }}">
-<title>Swap-system | Arquivo de Checklists</title>
+<title>Checklist | Arquivo de Checklists</title>
 <link rel="stylesheet" href="{{ url_for('static',filename='style.css') }}">
 </head>
 <body>
 <header class="topbar">
-  <div class="brand"><span class="logo">✓</span><div><strong>SWAP-SYSTEM</strong><small>Produção · arquivo de checklists</small></div></div>
+  <div class="brand"><span class="logo">✓</span><div><strong>CHECKLIST</strong><small>Produção · arquivo de checklists</small></div></div>
   <div class="header-right"><span class="user">{{ me.full_name }}</span><button id="logout" class="linkbtn" type="button">Sair da conta</button></div>
 </header>
 <main class="layout">
@@ -45,7 +45,7 @@
   <section class="panel" id="detail-content"></section>
 </section>
 </main>
-<footer class="site-footer"><span>SWAP-SYSTEM · CHECKLIST DE PRODUÇÃO</span><strong>Criado por: Vinicius Cavalcante</strong></footer>
+<footer class="site-footer"><span>CHECKLIST · PRODUÇÃO</span><strong>Criado por: Vinicius Cavalcante</strong></footer>
 <div id="app-data" data-items="{{ items | tojson | forceescape }}" hidden></div>
 <script src="{{ url_for('static',filename='script.js') }}" defer></script>
 </body></html>

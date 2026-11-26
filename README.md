@@ -1,4 +1,4 @@
-# Swap-system — Arquivo Digital de Checklists
+# Checklist — Arquivo Digital de Checklists
 
 Aplicação em Flask para passagem de turno da produção. **Uma única conta compartilhada**, botão **Criar checklist** e pastas automáticas por **mês/ano do salvamento** (horário de Fortaleza). Todos que entram na conta podem criar e consultar checklists. Cada checklist recebe ID, horário UTC do servidor (exibido em horário de Fortaleza), data do turno, responsáveis, setor, 9 verificações e observações.
 
@@ -9,7 +9,7 @@ Aplicação em Flask para passagem de turno da produção. **Uma única conta co
 ## Hospedagem Render + Neon
 
 1. Crie um banco PostgreSQL no Neon em https://console.neon.tech, plano Free. Em **Connect**, copie a URL com SSL. A conexão tem senha: nunca coloque no GitHub.
-2. No Render https://dashboard.render.com, crie **New > Blueprint** com `Vnn777/Swap-system` na branch `main`. Ou Web Service com build `pip install -r requirements.txt` e start `gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 app:app`.
+2. No Render https://dashboard.render.com, crie **New > Blueprint** com `Vnn777/checklist` na branch `main`. Ou Web Service com build `pip install -r requirements.txt` e start `gunicorn --bind 0.0.0.0:$PORT --workers 1 --threads 4 app:app`.
 3. Configure as variáveis **somente no painel do Render**:
 
 | Variável | Valor |
